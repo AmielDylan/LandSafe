@@ -1,7 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { pool } = require('../config/db');
-const { recordDocumentHashOnChain } = require('../utils/blockchain');
+const { recordDocumentHashOnChain, verifyDocumentOnChain } = require('../utils/blockchain');
 
 const router = express.Router();
 
@@ -139,12 +139,29 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const transmission = result.rows[0];
 
-    // Optionnel : Enregistrer le hash sur la blockchain
-    // Cette partie sera implémentée dans utils/blockchain.js
+    // Optionnel : Enregistrer le hash sur la blockchain si le document n'est pas déjà certifié
+    // Note: Le document devrait déjà être certifié lors de l'upload, mais on peut vérifier
     if (document.ipfs_hash) {
       try {
-        const blockchainHash = await recordDocumentHashOnChain(document.ipfs_hash);
-        if (blockchainHash) {
+        // Vérifier d'abord si le document est déjà certifié
+        // Si oui, on peut utiliser le hash_blockchain existant du document
+        const docCheckQuery = `
+          SELECT blockchain_tx_hash, blockchain_document_id
+          FROM documents
+          WHERE id = $1
+        `;
+        const docCheckResult = await pool.query(docCheckQuery, [document_id]);
+        
+        if (docCheckResult.rows[0]?.blockchain_tx_hash) {
+          // Le document est déjà certifié, utiliser son hash
+          hashBlockchain = docCheckResult.rows[0].blockchain_tx_hash;
+          console.log('📋 Document déjà certifié, utilisation du hash existant');
+        } else {
+          // Le document n'est pas certifié, on peut le certifier maintenant
+          console.log('⛓️ Certification du document pour la transmission...');
+          const blockchainResult = await recordDocumentHashOnChain(document.ipfs_hash);
+          hashBlockchain = blockchainResult.transactionHash;
+          
           // Mettre à jour la transmission avec le hash blockchain
           const updateQuery = `
             UPDATE transmissions
@@ -152,11 +169,12 @@ router.post('/', authenticateToken, async (req, res) => {
             WHERE id = $2
             RETURNING hash_blockchain
           `;
-          const updateResult = await pool.query(updateQuery, [blockchainHash, transmission.id]);
+          const updateResult = await pool.query(updateQuery, [hashBlockchain, transmission.id]);
           hashBlockchain = updateResult.rows[0].hash_blockchain;
+          console.log('✅ Transmission mise à jour avec hash blockchain:', hashBlockchain);
         }
       } catch (blockchainError) {
-        console.error('Erreur lors de l\'enregistrement blockchain:', blockchainError);
+        console.error('❌ Erreur lors de l\'enregistrement blockchain:', blockchainError.message);
         // Ne pas faire échouer la requête si l'enregistrement blockchain échoue
         // La transmission est déjà créée en base
       }
