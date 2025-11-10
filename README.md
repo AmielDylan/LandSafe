@@ -426,7 +426,7 @@ Pour toute question ou problème :
 
 **🔒 Sécurisé • ⛓️ Décentralisé • 🌐 Transparent**
 
-Made with ❤️ by LandSafe Team
+Made with ❤️ by Amiel ADJOVI
 
 </div>
 
