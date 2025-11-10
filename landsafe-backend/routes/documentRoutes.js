@@ -102,7 +102,30 @@ router.post('/upload-document', authenticateToken, upload.single('file'), async 
     }
 
     // Certification blockchain
-    const userId = req.user.uid;
+    // Créer ou récupérer l'utilisateur dans la base de données avec un UUID valide
+    let userId;
+    const userCheckQuery = `SELECT id FROM users WHERE email = $1 LIMIT 1`;
+    const userCheckResult = await pool.query(userCheckQuery, [req.user.email || 'test-api@landsafe.com']);
+    
+    if (userCheckResult.rows.length > 0) {
+      userId = userCheckResult.rows[0].id;
+      console.log('   Utilisation utilisateur existant:', userId);
+    } else {
+      // Créer un nouvel utilisateur
+      const createUserQuery = `
+        INSERT INTO users (email, nom, rôle)
+        VALUES ($1, $2, $3)
+        RETURNING id
+      `;
+      const createUserResult = await pool.query(createUserQuery, [
+        req.user.email || 'test-api@landsafe.com',
+        req.user.name || 'Test User',
+        'proprietaire'
+      ]);
+      userId = createUserResult.rows[0].id;
+      console.log('   Utilisateur créé:', userId);
+    }
+    
     let blockchainResult = null;
     let statut = 'en_attente';
 
@@ -435,13 +458,33 @@ router.get('/verify-blockchain/:id', authenticateToken, async (req, res) => {
 router.get('/:userId', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
-    const currentUserId = req.user.uid;
+    const currentUserEmail = req.user.email || 'test-api@landsafe.com';
+
+    // Récupérer l'UUID de l'utilisateur depuis la base de données
+    const userQuery = `SELECT id FROM users WHERE email = $1 LIMIT 1`;
+    const userResult = await pool.query(userQuery, [currentUserEmail]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Utilisateur non trouvé dans la base de données',
+      });
+    }
+    
+    const currentUserId = userResult.rows[0].id;
 
     // Vérifier que l'utilisateur demande ses propres documents
-    // TODO: Vérifier les droits admin/notaire depuis la base de données
-    if (userId !== currentUserId) {
-      // Pour l'instant, seul le propriétaire peut accéder à ses documents
-      // On pourra ajouter une vérification de rôle depuis la base de données plus tard
+    // Si userId est un UUID, comparer directement
+    // Sinon, utiliser l'UUID de l'utilisateur actuel
+    let targetUserId = userId;
+    
+    // Si userId n'est pas un UUID valide, utiliser l'UUID de l'utilisateur actuel
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(userId)) {
+      targetUserId = currentUserId;
+    }
+    
+    if (targetUserId !== currentUserId) {
       return res.status(403).json({
         error: 'Forbidden',
         message: 'Vous n\'avez pas accès aux documents de cet utilisateur',
@@ -468,7 +511,7 @@ router.get('/:userId', authenticateToken, async (req, res) => {
       ORDER BY created_at DESC
     `;
 
-    const result = await pool.query(query, [userId]);
+    const result = await pool.query(query, [currentUserId]);
 
     res.json({
       documents: result.rows,
@@ -498,7 +541,7 @@ router.post('/download/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { password } = req.body;
-    const currentUserId = req.user.uid;
+    const currentUserEmail = req.user.email || 'test-api@landsafe.com';
 
     if (!password) {
       return res.status(400).json({ 
@@ -506,6 +549,19 @@ router.post('/download/:id', authenticateToken, async (req, res) => {
         message: 'Mot de passe requis pour déchiffrer le document' 
       });
     }
+
+    // Récupérer l'UUID de l'utilisateur depuis la base de données
+    const userQuery = `SELECT id FROM users WHERE email = $1 LIMIT 1`;
+    const userResult = await pool.query(userQuery, [currentUserEmail]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Utilisateur non trouvé dans la base de données',
+      });
+    }
+    
+    const currentUserId = userResult.rows[0].id;
 
     // Récupérer le document
     const docResult = await pool.query(`
